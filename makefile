@@ -9,7 +9,7 @@ build:
 	${CXX} ${CXXFLAGS} src/*.cpp ${LIBRARIES} -o bin/program 
 	
 run:
-	./bin/program
+	mpirun -n 6 ./bin/program
  
 clean:
 	rm -f bin/*.o bin/program
