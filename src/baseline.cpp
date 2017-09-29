@@ -14,7 +14,7 @@ using namespace std;
 #define YOU_CAN_EAT 3
 #define YOU_CAN_NOT_EAT 4
 
-#define DEBUG true
+#define DEBUG false
 #define MAX_SLEEP_TIME 10
 
 #define MASTER_THREAD 0
@@ -42,6 +42,10 @@ public:
 		return false;
 	}
 	
+	bool tryPickUp() {
+		return ( this->m_isDown );
+	}
+	
 	/* Call to change the forks state to "down" */
 	bool setDown() {
 		if( !( this->m_isDown ) ) {
@@ -51,6 +55,10 @@ public:
 		
 		/* Fork is already down */
 		return false;
+	}
+	
+	bool trySetDown() {
+		return !( this->m_isDown );
 	}
 	
 	bool isDown() {
@@ -81,6 +89,10 @@ public:
 		return false;
 	}
 	
+	bool tryStartEating() {
+		return !( this->m_isEating );
+	}
+	
 	bool stopEating() {
 		
 		if( this->m_isEating ) {
@@ -90,6 +102,10 @@ public:
 		
 		/* Philosopher is not currently eating */
 		return false;
+	}
+	
+	bool tryStopEating() {
+		return ( this->m_isEating );
 	}
 
 };
@@ -162,6 +178,18 @@ public:
 	
 };
 
+
+int leftIdx( int idx, int numPhilosophers ) {
+	if( idx == 0 ) {
+		return numPhilosophers - 1;
+	}
+	return idx - 1;
+}
+
+int rightIdx( int idx, int numPhilosophers ) {
+	return ( idx + 1 ) % numPhilosophers;
+}
+
 int main ( int argc, char *argv[] )
 {
   int id; //my MPI ID
@@ -196,6 +224,12 @@ int main ( int argc, char *argv[] )
 	int numPhilos( p - 1 );
 	PlaceSetting* philTableSetting;
 	Table table( numPhilos );
+	bool* waiting;
+	
+	waiting = new bool[ numPhilos ];
+	for( int p = 0; p < numPhilos; p++ ) {
+		waiting[ p ] = false;
+	}
 	
 	//let the philosophers check in
     while( true ) {
@@ -239,6 +273,7 @@ int main ( int argc, char *argv[] )
 					std::cout << "Philosopher " << phil_id << " can't eat because fork "
 					<< ( ( phil_id + 1 ) % numPhilos )
 					<< " is not on the table" << std::endl;
+					waiting[ phil_id ] = true;
 				}
 				
 			} else { // Fork 1 is not down
@@ -246,6 +281,7 @@ int main ( int argc, char *argv[] )
 				std::cout << "Philosopher " << phil_id << " can't eat because fork "
 				<< ( phil_id )
 				<< " is not on the table" << std::endl;
+				waiting[ phil_id ] = true;
 				
 			}
 			
@@ -277,6 +313,50 @@ int main ( int argc, char *argv[] )
 			
 			std::cout << "Philosopher " << phil_id << " is now not eating." << std::endl;
 			
+			if( waiting[ leftIdx( phil_id, numPhilos ) ] ) {
+				
+				/* Try to start eating */
+				philTableSetting = table.getPlaceSettingForPhilosopherAt( leftIdx( phil_id, numPhilos ) );
+				if( ( table.getPhilosopherAt( leftIdx( phil_id, numPhilos ) )->tryStartEating() ) &&
+				( philTableSetting->fork1->tryPickUp() ) &&
+				( philTableSetting->fork2->tryPickUp() )  ) {
+					
+					table.getPhilosopherAt( leftIdx( phil_id, numPhilos ) )->startEating();
+					philTableSetting->fork1->pickUp();
+					philTableSetting->fork2->pickUp();
+					
+					std::cout << "Philosopher " << leftIdx( phil_id, numPhilos ) << " can now eat." << std::endl;
+					std::cout << "Signaling to philosopher " << leftIdx( phil_id, numPhilos ) << " to begin eating." << std::endl;
+					msgOut = YOU_CAN_EAT;
+					MPI::COMM_WORLD.Send( &msgOut, 1, MPI::INT, PHILOSOPHER_THREAD( leftIdx( phil_id, numPhilos ) ), tag );
+					waiting[ leftIdx( phil_id, numPhilos ) ] = false;				
+					
+				}
+				
+			}
+			
+			if( waiting[ rightIdx( phil_id, numPhilos ) ] ) {
+				
+				/* Try to start eating */
+				philTableSetting = table.getPlaceSettingForPhilosopherAt( rightIdx( phil_id, numPhilos ) );
+				if( ( table.getPhilosopherAt( rightIdx( phil_id, numPhilos ) )->tryStartEating() ) &&
+				( philTableSetting->fork1->tryPickUp() ) &&
+				( philTableSetting->fork2->tryPickUp() )  ) {
+					
+					table.getPhilosopherAt( rightIdx( phil_id, numPhilos ) )->startEating();
+					philTableSetting->fork1->pickUp();
+					philTableSetting->fork2->pickUp();
+					
+					std::cout << "Philosopher " << rightIdx( phil_id, numPhilos ) << " can now eat." << std::endl;
+					std::cout << "Signaling to philosopher " << rightIdx( phil_id, numPhilos ) << " to begin eating." << std::endl;
+					msgOut = YOU_CAN_EAT;
+					MPI::COMM_WORLD.Send( &msgOut, 1, MPI::INT, PHILOSOPHER_THREAD( rightIdx( phil_id, numPhilos ) ), tag );
+					waiting[ rightIdx( phil_id, numPhilos ) ] = false;				
+					
+				}
+				
+			}
+			
 			break;
 		
 		default:
@@ -284,29 +364,13 @@ int main ( int argc, char *argv[] )
 			return 1;
 		}
 		
-      //OLD SYNTAX		std::cout << status.getSource() << std::endl;
-		//std::cout << status.Get_source() << std::endl;
-  	}
+	}
   }
   else //I'm a philosopher
   {
-    /* NOTE: The following code sends a random integer (message) back to the server. You do
-     *
-     *                            * * * * * * * * NOT * * * * * * * *
-     *
-     * want to send a random message in the solution... you want a specific message (integer)
-     * to mean something specific (like requesting to eat, being allowed to eat, returning
-     * resources, etc.)
-     */
     int msgOut; // Send "I want to eat" message
 	int msgIn;
 	int sleepTime;
-	int philos_id;
-
-  	//std::cout << "This is Philosopher " << id << " requesting to eat."<< std::endl;
-  	//MPI::COMM_WORLD.Send ( &msgOut, 1, MPI::INT, 0, tag );
-	
-	philos_id = id - 1;
 	
 	while( true ) {
 		
@@ -316,7 +380,6 @@ int main ( int argc, char *argv[] )
 		
 		// Let master know I'm hungry
 		msgOut = I_WANT_TO_EAT;
-		std::cout << "Philosopher " << philos_id << " signaling request to eat." << std::endl;
 		MPI::COMM_WORLD.Send( &msgOut, 1, MPI::INT, MASTER_THREAD, tag );
 		
 		MPI::COMM_WORLD.Recv( &msgIn, 1, MPI::INT, MASTER_THREAD, tag, status );
@@ -337,15 +400,12 @@ int main ( int argc, char *argv[] )
 			}
 		}
 		
-		std::cout << "Philosopher " << philos_id << " recieved message to begin eating." << std::endl;
-		
 		// Wait for a lil bit
 		sleepTime = rand() % MAX_SLEEP_TIME;
 		sleep( sleepTime );
 		
 		// Let master know I'm full
 		msgOut = IM_DONE_EATING;
-		std::cout << "Philosopher " << philos_id << " signaling request to stop eating." << std::endl;
 		MPI::COMM_WORLD.Send( &msgOut, 1, MPI::INT, MASTER_THREAD, tag );
 		
 	} /* while */
